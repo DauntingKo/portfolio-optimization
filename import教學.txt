@@ -1,0 +1,5 @@
+export:
+conda list -e > req.txt
+
+import:
+conda create -n <environment-name> --file req.txt
