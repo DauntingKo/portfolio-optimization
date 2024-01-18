@@ -16,273 +16,22 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from early_stopping import EarlyStopping
 import random
-
-seed = 42
-os.environ['PYTHONHASHSEED'] = str(seed)
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-
-class FocalLoss(torch.nn.Module):
-    def __init__(self, gamma=2, alpha=None, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.gamma = gamma
-        self.alpha = alpha
-        self.reduction = reduction
-
-    def forward(self, input, target):
-        ce_loss = F.nll_loss(input, target)
-        pt = torch.exp(-ce_loss)
-        focal_loss = (1 - pt) ** self.gamma * ce_loss
-        self.alpha = self.alpha.to(input.device)
-        if self.alpha is not None:
-            focal_loss = self.alpha[target] * focal_loss
-
-        if self.reduction == 'mean':
-            return torch.mean(focal_loss)
-        elif self.reduction == 'sum':
-            return torch.sum(focal_loss)
-        else:
-            return focal_loss
-
-#Graph Sample and Aggregation
-class SAGE(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, n_layers=2):
-        super(SAGE, self).__init__()
-        self.n_layers = n_layers
-        self.layers = torch.nn.ModuleList()
-        self.layers_bn = torch.nn.ModuleList() #batch normalization
-
-        if n_layers == 1:
-            self.layers.append(SAGEConv(in_channels, out_channels, normalize=False))
-        elif n_layers == 2:
-            self.layers.append(SAGEConv(in_channels, hidden_channels, normalize=False))
-            self.layers_bn.append(torch.nn.BatchNorm1d(hidden_channels))
-            self.layers.append(SAGEConv(hidden_channels, out_channels, normalize=False))
-        else:
-            self.layers.append(SAGEConv(in_channels, hidden_channels, normalize=False))
-            self.layers_bn.append(torch.nn.BatchNorm1d(hidden_channels))
-
-        for _ in range(n_layers - 2):
-            self.layers.append(SAGEConv(hidden_channels, hidden_channels, normalize=False))
-            self.layers_bn.append(torch.nn.BatchNorm1d(hidden_channels))
-
-            self.layers.append(SAGEConv(hidden_channels, out_channels, normalize=False))
-
-        for layer in self.layers:
-            layer.reset_parameters()
-
-    def forward(self, x, edge_index):
-        if len(self.layers) > 1:
-            looper = self.layers[:-1]
-        else:
-            looper = self.layers
-        
-        for i, layer in enumerate(looper):
-            x = layer(x, edge_index)
-            try:
-                x = self.layers_bn[i](x)
-            except Exception as e:
-                abs(1)
-            finally:
-                x = F.relu(x)
-                x = F.dropout(x, p=0.5, training=self.training)
-
-        if len(self.layers) > 1:
-            x = self.layers[-1](x, edge_index)
-        return F.log_softmax(x, dim=-1), torch.var(x)
-
-    def inference(self, total_loader, device):
-        xs = []
-        var_ = []
-        for batch in total_loader:
-            out, var = self.forward(batch.x.to(device), batch.edge_index.to(device))
-            out = out[:batch.batch_size]
-            xs.append(out.cpu())
-            var_.append(var.item())
-
-        out_all = torch.cat(xs, dim=0)
-
-        return out_all, var_
+from model import SAGE,FocalLoss
+from yf_dataset import getInput
 
 
-def min_max_scaling(data, feature_range=(0, 1)):
-    """
-    Min-Max Scaling for data.
-
-    Parameters:
-    - data: A NumPy array containing the data to be scaled.
-    - feature_range: A tuple specifying the desired feature range (default is [0, 1]).
-
-    Returns:
-    - scaled_data: The scaled data within the specified feature range.
-    """
-    min_val, max_val = feature_range
-    min_data = np.min(data, axis=0)
-    max_data = np.max(data, axis=0)
-    scaled_data = (data - min_data) / (max_data - min_data) * (max_val - min_val) + min_val
-    return scaled_data
 
 def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction):
-    start_date = "2011-01-30"
-    end_date = "2019-08-30"
-    yfdata = yf.download('^GSPC', start=start_date, end=end_date)
-    golddata = yf.download('GC=F', start=start_date, end=end_date)
-    oildata = yf.download('CL=F', start=start_date, end=end_date)
-
-    yfdata_dates = yfdata.index
-    golddata_dates = golddata.index
-
-    # 找出 yfdata 有而 golddata 没有的日期
-    missing_dates = yfdata_dates[~yfdata_dates.isin(golddata_dates)]
-    missing_data = pd.DataFrame(index=missing_dates,columns=golddata.columns)
-    for date in missing_dates:
-        previous_date = golddata_dates[golddata_dates < date]
-        if not previous_date.empty:
-            last_known_data = golddata.loc[previous_date.max()]
-            missing_data.loc[date] = last_known_data
-
-    golddata = pd.concat([golddata, missing_data])
-    golddata = golddata.add_prefix('gold ')
-    golddata = golddata.sort_index()
-
-    # 找出 yfdata 有而 oildata 没有的日期
-    oildata_dates = oildata.index
-    missing_dates = yfdata_dates[~yfdata_dates.isin(oildata_dates)]
-    missing_data = pd.DataFrame(index=missing_dates,columns=oildata.columns)
-    for date in missing_dates:
-        previous_date = oildata_dates[oildata_dates < date]
-        if not previous_date.empty:
-            last_known_data = oildata.loc[previous_date.max()]
-            missing_data.loc[date] = last_known_data
-
-    oildata = pd.concat([oildata, missing_data])
-    oildata = oildata.add_prefix('oil ')
-    oildata = oildata.sort_index()
-#--------------------------------------------------------------------------------
-    days = 8 #多取一天後續方便計算label
-    date_cols = []
-    price_cols = yfdata.columns.tolist()
-    price_cols.append('gold Adj Close')
-    price_cols.append('oil Adj Close')
-    all_data = {}
-    sliding_window = 1
-
-    def group_by_week(data,price_col):
-        local_df = []
-        for i in range(len(data)):
-            if np.isnan(data[price_col][i]): 
-                print(str(data.index[i]))
-                break
-            local_df.append(data[price_col][i])
-            
-            if len(local_df) == days:
-                col_name = str(data.index[i - days + 1]) + ' ~ ' + str(data.index[i])
-                if price_col == price_cols[0]:
-                    date_cols.append(col_name)
-                all_data[(price_col, col_name)] = local_df.copy()
-                for _ in range(sliding_window):
-                    local_df.pop(0) 
-                    
-    for price_col in price_cols:
-        if price_col.startswith('gold'):
-            group_by_week(golddata, price_col)
-        elif price_col.startswith('oil'):
-            group_by_week(oildata, price_col)
-        else: 
-            group_by_week(yfdata, price_col)
-
-
-    multi_columns = pd.MultiIndex.from_product([price_cols,date_cols],names=['price','date'])
-    group_by_days_yfdata = pd.DataFrame(data=all_data,columns=multi_columns)
-#---------------------------------------------------------------------------------------------------
-    data = group_by_days_yfdata
-    print("If there is NAN in data? ",data.isnull().values.any())
-    returns = data['Adj Close'].pct_change().fillna(0) 
-    print(returns.keys())
-    scaled_returns = StandardScaler().fit_transform(returns) #Z-score標準化:mean = 0,std = 1，後續用來計算相關性
-    # 計算各週之間的相關性
-    correlation_matrix = np.corrcoef(scaled_returns, rowvar=False)
-
-    # 將相關性矩陣轉換為鄰接矩陣
-    adjacency_matrix = torch.tensor(correlation_matrix)
-
-    src_nodes, dst_nodes = np.where((adjacency_matrix > 0.7))
-    directed_index = np.where((src_nodes < dst_nodes) & ((dst_nodes - src_nodes) <= 495))
-    src_nodes = src_nodes[directed_index]
-    dst_nodes = dst_nodes[directed_index]
-
-    edge_index = torch.tensor([
-        src_nodes,  
-        dst_nodes  
-    ],dtype=torch.long) #邊
-
-    features = ['Adj Close', 'Open', 'High', 'Low', 'Volume']
-    if (withGold):
-        features.append('gold Adj Close')
-    if (withOil):
-        features.append('oil Adj Close')
-    num_nodes = len(returns.keys())
-    num_features = len(features)
-    feature_matrix = np.zeros((num_nodes, num_features,len(data)-1)) 
-
-    # 將數據填充到特徵矩陣中
-    for i, symbol in enumerate(returns.keys()):
-        for j,feature in enumerate(features):
-            company_data = data[(feature,symbol)]
-            feature_matrix[i, j] = torch.tensor(min_max_scaling(company_data.values[:-1]),dtype=torch.float32) #取得第一天到第七天
-            
-    # print("Any NAN in feature_matrix= ",np.isnan(feature_matrix).any())
-
-    feature_matrix = torch.tensor(feature_matrix,dtype=torch.float32)
-    feature_matrix = feature_matrix.reshape(feature_matrix.shape[0], -1)
-
-    y_list = []
-    for i, symbol in enumerate(returns.keys()):
-        lastDay = data.iloc[-2][('Adj Close',symbol)] #input中最後一天的資料
-        predictDay = data.iloc[-1][('Adj Close',symbol)] #隔天的資料
-        if (lastDay/predictDay > 1.005):
-            y_list.append([2]) #下跌
-        elif ( 0.995 < lastDay/predictDay < 1.005): #應該在某個範圍內
-            y_list.append([1]) #持平
-        else:
-            y_list.append([0]) #上漲
-
-    y = torch.tensor(y_list, dtype=torch.long)
-
-    print("feature_matrix_shape = ",feature_matrix.shape)
-    print("edge size= ",edge_index.shape)
-    print('y = ',y.shape)
-    gnnInputData = Data(x=feature_matrix,edge_index=edge_index,y=y)
-
-    train_eval_test_index = []
-    for target_value in ['~ 2013-01-30','~ 2017-05-23','~ 2018-03-27','~ 2019-08-29']:
-        for index, item in enumerate(returns.keys()):
-            if target_value in item:
-                train_eval_test_index.append(index)
-                print(f"找到日期 '{item}'，index= {index}")
-                break
-
-    train_idx = torch.tensor(np.arange(train_eval_test_index[0],train_eval_test_index[1]+1),dtype=torch.long)
-    #evaluate input節點
-    eval_idx = torch.tensor(np.arange(train_eval_test_index[1]+1,train_eval_test_index[2]+1),dtype=torch.long)
-    #test input
-    test_idx = torch.tensor(np.arange(train_eval_test_index[2]+1,len(feature_matrix)),dtype=torch.long)
-
-    count_0 = np.count_nonzero(y == 0)
-    count_1 = np.count_nonzero(y == 1)
-    count_2 = np.count_nonzero(y == 2)
-
-    print("上漲(0)的数量：", count_0)
-    print("持有(1)的数量：", count_1)
-    print("下跌(2)的数量：", count_2)
-
-    weight = [len(y) / (count_0 + 1e-8), len(y) / (count_1 + 1e-8), len(y) / (count_2 + 1e-8)]
-    print("weight: ",weight)
+    seed = 42
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    train_idx, eval_idx, test_idx, weight, yfdata, gnnInputData = getInput(False, False)
 
     train_loader =  NeighborLoader(gnnInputData, input_nodes=train_idx,
                               shuffle=False, num_workers=os.cpu_count() - 2,
@@ -392,6 +141,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction):
             print("Early stopping")
             break 
 
+    plt.figure()
     plt.plot(np.arange(1, len(train_accs)+1), train_accs, label='Train Accuracy', marker='o')
     # plt.plot(np.arange(0, len(val_accs)), val_accs, label='Validation Accuracy', marker='o')
     plt.plot(np.arange(1, len(test_accs)+1), test_accs, label='Test Accuracy', marker='o')
@@ -409,6 +159,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction):
     plt.savefig(f'result/{lossFunction}/{title}/acc.png',bbox_inches = 'tight')
     plt.show()
 
+    plt.figure()
     plt.plot(np.arange(1, len(total_train_loss)+1), [tensor.item() for tensor in total_train_loss], label='training loss', marker='o')
     plt.plot(np.arange(1, len(total_test_loss)+1), [tensor.item() for tensor in total_test_loss], label='test_loss', marker='o')
 
@@ -424,7 +175,8 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction):
     plt.ylabel('Loss')
     plt.savefig(f'result/{lossFunction}/{title}/loss.png',bbox_inches = 'tight')
     plt.show()
-
+    
+    plt.figure()
     labels=['rising','hold','drop']     
     fig, ax= plt.subplots()
     sns.heatmap(early_stopping.best_test_confusion_matrix, annot=True, fmt='g', ax=ax);  #annot=True to annotate cells, ftm='g' to disable scientific notation
@@ -436,6 +188,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction):
     ax.xaxis.set_ticklabels(labels); ax.yaxis.set_ticklabels(labels)
     fig.savefig(f'result/{lossFunction}/{title}/cm.png',bbox_inches = 'tight')
     fig.show()
+    plt.close(fig)
     return early_stopping.best_test_acc, early_stopping.best_test_loss
 
 
