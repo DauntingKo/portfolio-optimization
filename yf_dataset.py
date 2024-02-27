@@ -4,6 +4,34 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from torch_geometric.data import Data
 import torch
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+
+def get_macd_param (yfdata):
+    def condition(macd_yearMonth, date):
+        year = int(macd_yearMonth.split("-")[0])
+        month_start, month_end = map(int, macd_yearMonth.split("-")[1].split("~"))
+
+        date_three_months_prior = date - relativedelta(months=3)
+        
+        if (year == date_three_months_prior.year and
+            month_start <= date_three_months_prior.month <= month_end):
+            return True
+        else:
+            return False
+        
+    macd_params = pd.read_csv('macdBestParam_per_3_month.csv')
+    
+    # Initialize a column for MACD parameters
+    yfdata['macd Param'] = None
+    
+    # Iterate through yfdata to find and assign the correct MACD parameters
+    for date in yfdata.index:
+        # Find the corresponding MACD parameter
+        for _, row in macd_params.iterrows():
+            if condition(row['yearMonth'], date):
+                yfdata.at[date, 'macd Param'] = row['macdParam']
+                break 
 
 def min_max_scaling(data, feature_range=(0, 1)):
     """
@@ -22,12 +50,62 @@ def min_max_scaling(data, feature_range=(0, 1)):
     scaled_data = (data - min_data) / (max_data - min_data) * (max_val - min_val) + min_val
     return scaled_data
 
-def getInput(withGold, withOil):
+def parse_macd_params(param_string):
+    return map(int, param_string.split(','))
+
+def getMacdSignal(yfdata, macdParamOptimize):
+    if macdParamOptimize:
+        print('macdParamOptimize = True!!!!!!')
+        for index, row in yfdata.iterrows():
+            fast_span, slow_span, signal_span = parse_macd_params(row['macd Param'])
+
+            current_data = yfdata.loc[:index]
+            
+            current_data['Fast EMA'] = current_data['Adj Close'].ewm(span=fast_span, adjust=False).mean()
+            current_data['Slow EMA'] = current_data['Adj Close'].ewm(span=slow_span, adjust=False).mean()
+            
+            current_data['MACD'] = current_data['Fast EMA'] - current_data['Slow EMA']
+            current_data['Signal Line'] = current_data['MACD'].ewm(span=signal_span, adjust=False).mean()
+
+            last_macd = current_data['MACD'].iloc[-1]
+            last_signal_line = current_data['Signal Line'].iloc[-1]
+            prev_macd = current_data['MACD'].iloc[-2] if len(current_data) > 1 else last_macd
+            prev_signal_line = current_data['Signal Line'].iloc[-2] if len(current_data) > 1 else last_signal_line
+
+            if last_macd > last_signal_line and prev_macd <= prev_signal_line:
+                yfdata.at[index, 'Signal'] = 0  
+            elif last_macd < last_signal_line and prev_macd >= prev_signal_line:
+                yfdata.at[index, 'Signal'] = 2  
+            else:
+                yfdata.at[index, 'Signal'] = 1  
+    else:
+        fast_span = 5  
+        slow_span = 20  
+        signal_span = 9  
+        yfdata['Fast EMA'] = yfdata['Adj Close'].ewm(span=fast_span, adjust=False).mean()
+        yfdata['Slow EMA'] = yfdata['Adj Close'].ewm(span=slow_span, adjust=False).mean()
+
+        yfdata['MACD'] = yfdata['Fast EMA'] - yfdata['Slow EMA']
+
+        yfdata['Signal Line'] = yfdata['MACD'].ewm(span=signal_span, adjust=False).mean()
+        yfdata['Signal'] = 1
+
+        for i in range(1, len(yfdata)):
+            if yfdata['MACD'].iloc[i] > yfdata['Signal Line'].iloc[i] and yfdata['MACD'].iloc[i - 1] <= yfdata['Signal Line'].iloc[i - 1]:
+                yfdata['Signal'].iloc[i] = 0  
+            elif yfdata['MACD'].iloc[i] < yfdata['Signal Line'].iloc[i] and yfdata['MACD'].iloc[i - 1] >= yfdata['Signal Line'].iloc[i - 1]:
+                yfdata['Signal'].iloc[i] = 2  
+    return
+
+def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False):
     start_date = "2011-01-30"
     end_date = "2019-09-01"
     yfdata = yf.download('^GSPC', start=start_date, end=end_date)
     golddata = yf.download('GC=F', start=start_date, end=end_date)
     oildata = yf.download('CL=F', start=start_date, end=end_date)
+    
+    get_macd_param(yfdata)
+    getMacdSignal(yfdata, macdParamOptimize)
 
     yfdata_dates = yfdata.index
     golddata_dates = golddata.index
@@ -62,6 +140,7 @@ def getInput(withGold, withOil):
     days = 8 #多取一天後續方便計算label
     date_cols = []
     price_cols = yfdata.columns.tolist()
+    price_cols.remove('macd Param')
     price_cols.append('gold Adj Close')
     price_cols.append('oil Adj Close')
     all_data = {}
@@ -121,6 +200,8 @@ def getInput(withGold, withOil):
         features.append('gold Adj Close')
     if (withOil):
         features.append('oil Adj Close')
+    if (withMacdSignal):
+        features.append('Signal')
     num_nodes = len(returns.keys())
     num_features = len(features)
     feature_matrix = np.zeros((num_nodes, num_features,len(data)-1)) 
@@ -129,7 +210,10 @@ def getInput(withGold, withOil):
     for i, symbol in enumerate(returns.keys()):
         for j,feature in enumerate(features):
             company_data = data[(feature,symbol)]
-            feature_matrix[i, j] = torch.tensor(min_max_scaling(company_data.values[:-1]),dtype=torch.float32) #取得第一天到第七天
+            if feature == 'Signal':
+                feature_matrix[i, j] = torch.tensor(company_data.values[:-1],dtype=torch.float32) #取得第一天到第七天
+            else:
+                feature_matrix[i, j] = torch.tensor(min_max_scaling(company_data.values[:-1]),dtype=torch.float32) #取得第一天到第七天
 
     feature_matrix = torch.tensor(feature_matrix,dtype=torch.float32)
     feature_matrix = feature_matrix.reshape(feature_matrix.shape[0], -1)

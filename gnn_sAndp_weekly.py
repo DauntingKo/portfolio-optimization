@@ -21,7 +21,7 @@ from yf_dataset import getInput
 
 
 
-def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction):
+def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSignal=False, macdParamOptimize=False):
     seed = 42
     os.environ['PYTHONHASHSEED'] = str(seed)
     random.seed(seed)
@@ -31,7 +31,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    train_idx, eval_idx, test_idx, weight, yfdata, gnnInputData = getInput(False, False)
+    train_idx, eval_idx, test_idx, weight, yfdata, gnnInputData = getInput(False, False, withMacdSignal=withMacdSignal, macdParamOptimize=macdParamOptimize)
 
     train_loader =  NeighborLoader(gnnInputData, input_nodes=train_idx,
                               shuffle=False, num_workers=os.cpu_count() - 2,
@@ -77,6 +77,8 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction):
     title = lossFunction
     if withGold: title += ' with gold'
     if withOil: title += ' with oil'
+    if withMacdSignal: title += ' with MACD Signal'
+    if macdParamOptimize: title += '(macdParamOptimize)'
     title += f' startLr={startLr:e} numNeighbors={numNeighbors}'
     if not os.path.exists(f'result/{lossFunction}/'):
         os.makedirs(f'result/{lossFunction}/')
