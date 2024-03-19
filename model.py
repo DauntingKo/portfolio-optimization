@@ -24,6 +24,7 @@ class SAGE(torch.nn.Module):
             self.layers.append(SAGEConv(hidden_channels, hidden_channels, normalize=False))
             self.layers_bn.append(torch.nn.BatchNorm1d(hidden_channels))
 
+        if n_layers > 2: 
             self.layers.append(SAGEConv(hidden_channels, out_channels, normalize=False))
 
         for layer in self.layers:
