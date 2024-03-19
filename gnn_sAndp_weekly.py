@@ -21,7 +21,7 @@ from yf_dataset import getInput
 
 
 
-def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSignal=False, macdParamOptimize=False):
+def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSignal=False, macdParamOptimize=False, gamma=2, withAlpha=True):
     seed = 42
     os.environ['PYTHONHASHSEED'] = str(seed)
     random.seed(seed)
@@ -63,18 +63,23 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         
         return train_acc, val_acc, test_acc, torch.mean(torch.Tensor(var)), y_true, out
     
-    def creterion(lossFunction , weight, out, y_true):
+    def creterion(lossFunction , weight, out, y_true, gamma, withAlpha):
         loss = 1
         match lossFunction:
             case 'CrossEntrophyLoss':
                 loss = F.nll_loss(out, torch.reshape(y_true, (-1,)))
             case 'FocalLoss':
-                focalLoss = FocalLoss(gamma=2,alpha=torch.tensor(weight),reduction='mean')
+                alpha = None
+                if withAlpha:
+                    alpha=torch.tensor(weight)
+                focalLoss = FocalLoss(gamma=gamma,alpha=alpha,reduction='mean')
                 loss = focalLoss(out, torch.reshape(y_true, (-1,)))
 
         return loss
     
     title = lossFunction
+    if lossFunction == 'FocalLoss':
+        title += f' (gamma={gamma} withAlpha={withAlpha})'
     if withGold: title += ' with gold'
     if withOil: title += ' with oil'
     if withMacdSignal: title += ' with MACD Signal'
@@ -101,6 +106,9 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     total_train_loss = []
     total_eval_loss = []
     total_test_loss = []
+    test_precision = []
+    test_recall = []
+    test_f1_score = []
     for epoch in range(1, epochs):
         model.train()
         pbar = tqdm(total=len(train_idx))
@@ -113,7 +121,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
             out = out[:batch_size]
             batch_y = batch.y[:batch_size].to(device)
             batch_y = torch.reshape(batch_y, (-1,))
-            loss = creterion(lossFunction, weight, out, batch_y)
+            loss = creterion(lossFunction, weight, out, batch_y, gamma, withAlpha)
             loss.backward()
             optimizer.step()
             batch_loss += float(loss)
@@ -123,9 +131,9 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         # loss = batch_loss / len(train_loader)
         approx_acc = total_correct / train_idx.size(0)
         train_acc, val_acc, test_acc, var, y_true, out = test(model, device)
-        train_loss = creterion(lossFunction, weight, out[train_idx], torch.reshape(y_true[train_idx], (-1,)))  
-        eval_loss = creterion(lossFunction, weight, out[eval_idx], torch.reshape(y_true[eval_idx], (-1,)))
-        test_loss = creterion(lossFunction, weight, out[test_idx], torch.reshape(y_true[test_idx], (-1,)))
+        train_loss = creterion(lossFunction, weight, out[train_idx], torch.reshape(y_true[train_idx], (-1,)), gamma, withAlpha)  
+        eval_loss = creterion(lossFunction, weight, out[eval_idx], torch.reshape(y_true[eval_idx], (-1,)), gamma, withAlpha)
+        test_loss = creterion(lossFunction, weight, out[test_idx], torch.reshape(y_true[test_idx], (-1,)), gamma, withAlpha)
         train_accs.append(train_acc)
         val_accs.append(val_acc)
         test_accs.append(test_acc)
@@ -134,6 +142,12 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         total_test_loss.append(test_loss)
         scheduler.step(eval_loss)
 
+        precisionScore = precision_score(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True), average='micro')
+        recallScore = recall_score(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True), average='micro')
+        f1Score = f1_score(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True), average='micro')
+        test_precision.append(precisionScore)
+        test_recall.append(recallScore)
+        test_f1_score.append(f1Score)
         cm = confusion_matrix(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True))
 
         print(f'TrainAcc: {train_acc:.4f}, ValAcc: {val_acc:.4f}, TestAcc: {test_acc:.4f}, trainLoss: {train_loss:.4f}, evalLoss: {eval_loss:.4f}, testLoss: {test_loss:.4f}')
@@ -148,7 +162,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     # plt.plot(np.arange(0, len(val_accs)), val_accs, label='Validation Accuracy', marker='o')
     plt.plot(np.arange(1, len(test_accs)+1), test_accs, label='Test Accuracy', marker='o')
 
-    plt.annotate(f'epoch: {early_stopping.best_epoch}, test_accs: {test_accs[early_stopping.best_epoch-1]:.2f}', 
+    plt.annotate(f'epoch: {early_stopping.best_epoch}, test_accs: {test_accs[early_stopping.best_epoch-1]:.2f}\ntest_precision: {test_precision[early_stopping.best_epoch-1]:.2f}, test_recall: {test_recall[early_stopping.best_epoch-1]:.2f}, test_f1_score: {test_f1_score[early_stopping.best_epoch-1]:.2f}', 
                 xy=(early_stopping.best_epoch, test_accs[early_stopping.best_epoch-1]), 
                 xytext=(early_stopping.best_epoch + 3, test_accs[early_stopping.best_epoch-1] - 0.02),  # 文本的位置
                 arrowprops=dict(facecolor='black', shrink=0.05),  # 箭頭的屬性

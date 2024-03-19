@@ -73,8 +73,8 @@ class FocalLoss(torch.nn.Module):
         ce_loss = F.nll_loss(input, target)
         pt = torch.exp(-ce_loss)
         focal_loss = (1 - pt) ** self.gamma * ce_loss
-        self.alpha = self.alpha.to(input.device)
         if self.alpha is not None:
+            self.alpha = self.alpha.to(input.device)
             focal_loss = self.alpha[target] * focal_loss
 
         if self.reduction == 'mean':
