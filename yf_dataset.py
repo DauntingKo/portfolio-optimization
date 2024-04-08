@@ -97,7 +97,7 @@ def getMacdSignal(yfdata, macdParamOptimize):
                 yfdata['Signal'].iloc[i] = 2  
     return
 
-def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False):
+def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False, corr=0.7):
     start_date = "2011-01-30"
     end_date = "2019-09-01"
     yfdata = yf.download('^GSPC', start=start_date, end=end_date)
@@ -185,7 +185,7 @@ def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False):
     # 將相關性矩陣轉換為鄰接矩陣
     adjacency_matrix = torch.tensor(correlation_matrix)
 
-    src_nodes, dst_nodes = np.where((adjacency_matrix > 0.7))
+    src_nodes, dst_nodes = np.where((adjacency_matrix > corr))
     directed_index = np.where((src_nodes < dst_nodes) & ((dst_nodes - src_nodes) <= 495))
     src_nodes = src_nodes[directed_index]
     dst_nodes = dst_nodes[directed_index]
@@ -194,6 +194,10 @@ def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False):
         src_nodes,  
         dst_nodes  
     ],dtype=torch.long) #邊
+
+    edge_weights = adjacency_matrix[src_nodes, dst_nodes]
+    # 將邊權重轉為Tensor
+    edge_weights = torch.tensor(edge_weights, dtype=torch.float)
 
     features = ['Adj Close', 'Open', 'High', 'Low', 'Volume']
     if (withGold):
@@ -233,8 +237,9 @@ def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False):
 
     print("feature_matrix_shape = ",feature_matrix.shape)
     print("edge size= ",edge_index.shape)
+    print("edge_weights size= ",edge_weights.shape)
     print('y = ',y.shape)
-    gnnInputData = Data(x=feature_matrix,edge_index=edge_index,y=y)
+    gnnInputData = Data(x=feature_matrix,edge_index=edge_index,y=y,edge_weights=edge_weights)
 
     train_eval_test_index = []
     for target_value in ['~ 2013-01-30','~ 2017-05-23','~ 2018-03-27','~ 2019-08-29']:

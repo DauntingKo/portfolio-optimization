@@ -16,12 +16,12 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from early_stopping import EarlyStopping
 import random
-from model import SAGE,FocalLoss
+from model import SAGE,FocalLoss,SAGEWEIGHT
 from yf_dataset import getInput
 
 
 
-def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSignal=False, macdParamOptimize=False, gamma=2, withAlpha=True):
+def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSignal=False, macdParamOptimize=False, gamma=2, withAlpha=True, aggr='mean', corr=0.7):
     seed = 42
     os.environ['PYTHONHASHSEED'] = str(seed)
     random.seed(seed)
@@ -31,7 +31,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    train_idx, eval_idx, test_idx, weight, yfdata, gnnInputData = getInput(False, False, withMacdSignal=withMacdSignal, macdParamOptimize=macdParamOptimize)
+    train_idx, eval_idx, test_idx, weight, yfdata, gnnInputData = getInput(withGold, withOil, withMacdSignal=withMacdSignal, macdParamOptimize=macdParamOptimize, corr=corr)
 
     train_loader =  NeighborLoader(gnnInputData, input_nodes=train_idx,
                               shuffle=False, num_workers=os.cpu_count() - 2,
@@ -44,7 +44,10 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     def test(model, device):
         evaluator = Evaluator(name=target_dataset)
         model.eval()
-        out, var = model.inference(total_loader, device)
+        if aggr == 'weight':
+            out, var = model.inference(total_loader, device, gnnInputData)
+        else:
+            out, var = model.inference(total_loader, device)
         y_true = gnnInputData.y.cpu()
         y_pred = out.argmax(dim=-1, keepdim=True)
         
@@ -80,6 +83,9 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     title = lossFunction
     if lossFunction == 'FocalLoss':
         title += f' (gamma={gamma} withAlpha={withAlpha})'
+    if aggr == 'weight':
+        title += ' aggr=weight'
+        title += f' corr={corr}'
     if withGold: title += ' with gold'
     if withOil: title += ' with oil'
     if withMacdSignal: title += ' with MACD Signal'
@@ -91,7 +97,10 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         os.makedirs(f'result/{lossFunction}/{title}')
         
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = SAGE(gnnInputData.x.shape[1], 256, 3, n_layers=2)
+    if aggr == 'weight':
+        model = SAGEWEIGHT(gnnInputData.x.shape[1], 256, 3, n_layers=2)
+    else:
+        model = SAGE(gnnInputData.x.shape[1], 256, 3, n_layers=2)
     model.to(device)
     epochs = 100
     optimizer = torch.optim.Adam(model.parameters(), lr=startLr, weight_decay=1e-3)
@@ -117,7 +126,14 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         for batch in train_loader:
             batch_size = batch.batch_size
             optimizer.zero_grad()
-            out, _ = model(batch.x.to(device), batch.edge_index.to(device))
+            if aggr == 'weight':
+                batch_edge_weights = gnnInputData.edge_weights[batch.e_id]
+                # print("e_id= ",batch.e_id)
+                # print("batch edge size= ",batch.edge_index.shape)
+                # print("batch edge_weights size= ",batch_edge_weights.shape)
+                out, _ = model(batch.x.to(device), batch.edge_index.to(device), batch_edge_weights.to(device))
+            else:
+                out, _ = model(batch.x.to(device), batch.edge_index.to(device))
             out = out[:batch_size]
             batch_y = batch.y[:batch_size].to(device)
             batch_y = torch.reshape(batch_y, (-1,))
@@ -142,9 +158,9 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         total_test_loss.append(test_loss)
         scheduler.step(eval_loss)
 
-        precisionScore = precision_score(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True), average='micro')
-        recallScore = recall_score(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True), average='micro')
-        f1Score = f1_score(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True), average='micro')
+        precisionScore = precision_score(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True), average=None)
+        recallScore = recall_score(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True), average=None)
+        f1Score = f1_score(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True), average=None)
         test_precision.append(precisionScore)
         test_recall.append(recallScore)
         test_f1_score.append(f1Score)
@@ -162,7 +178,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     # plt.plot(np.arange(0, len(val_accs)), val_accs, label='Validation Accuracy', marker='o')
     plt.plot(np.arange(1, len(test_accs)+1), test_accs, label='Test Accuracy', marker='o')
 
-    plt.annotate(f'epoch: {early_stopping.best_epoch}, test_accs: {test_accs[early_stopping.best_epoch-1]:.2f}\ntest_precision: {test_precision[early_stopping.best_epoch-1]:.2f}, test_recall: {test_recall[early_stopping.best_epoch-1]:.2f}, test_f1_score: {test_f1_score[early_stopping.best_epoch-1]:.2f}', 
+    plt.annotate(f'epoch: {early_stopping.best_epoch}, test_accs: {test_accs[early_stopping.best_epoch-1]:.2f}', 
                 xy=(early_stopping.best_epoch, test_accs[early_stopping.best_epoch-1]), 
                 xytext=(early_stopping.best_epoch + 3, test_accs[early_stopping.best_epoch-1] - 0.02),  # 文本的位置
                 arrowprops=dict(facecolor='black', shrink=0.05),  # 箭頭的屬性
@@ -205,6 +221,21 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     fig.savefig(f'result/{lossFunction}/{title}/cm.png',bbox_inches = 'tight')
     fig.show()
     plt.close(fig)
+
+    scoreData = {
+        "": ["Precision", "Recall", "F1 score"],
+        "rising": [test_precision[early_stopping.best_epoch-1][0],test_recall[early_stopping.best_epoch-1][0],test_f1_score[early_stopping.best_epoch-1][0]],
+        "hold": [test_precision[early_stopping.best_epoch-1][1],test_recall[early_stopping.best_epoch-1][1],test_f1_score[early_stopping.best_epoch-1][1]],
+        "drop": [test_precision[early_stopping.best_epoch-1][2],test_recall[early_stopping.best_epoch-1][2],test_f1_score[early_stopping.best_epoch-1][2]]
+    }
+    scoredf = pd.DataFrame(scoreData)
+    fig, ax = plt.subplots()
+    ax.axis('tight')
+    ax.axis('off')
+    ax.table(cellText=scoredf.values, colLabels=scoredf.columns, loc='center',cellLoc='center')
+    fig.savefig(f'result/{lossFunction}/{title}/score.png',bbox_inches = 'tight')
+    plt.close(fig)
+
     return early_stopping.best_test_acc, early_stopping.best_test_loss
 
 
