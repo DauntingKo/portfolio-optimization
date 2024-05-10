@@ -21,7 +21,7 @@ from yf_dataset import getInput
 
 
 
-def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSignal=False, macdParamOptimize=False, gamma=2, withAlpha=True, aggr='mean', corr=0.7):
+def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSignal=False, macdParamOptimize=False, gamma=2, withAlpha=True, aggr='mean', corr=0.7, begin_days=1096):
     seed = 42
     os.environ['PYTHONHASHSEED'] = str(seed)
     random.seed(seed)
@@ -31,7 +31,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    train_idx, eval_idx, test_idx, weight, yfdata, gnnInputData = getInput(withGold, withOil, withMacdSignal=withMacdSignal, macdParamOptimize=macdParamOptimize, corr=corr)
+    train_idx, eval_idx, test_idx, weight, yfdata, gnnInputData = getInput(withGold, withOil, withMacdSignal=withMacdSignal, macdParamOptimize=macdParamOptimize, corr=corr, begin_days=begin_days)
 
     train_loader =  NeighborLoader(gnnInputData, input_nodes=train_idx,
                               shuffle=False, num_workers=os.cpu_count() - 2,
@@ -90,17 +90,22 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     if withOil: title += ' with oil'
     if withMacdSignal: title += ' with MACD Signal'
     if macdParamOptimize: title += '(macdParamOptimize)'
-    title += f' startLr={startLr:e} numNeighbors={numNeighbors}'
+    title += f' startLr={startLr:e} numNeighbors={numNeighbors} begin_days={begin_days}'
     if not os.path.exists(f'result/{lossFunction}/'):
         os.makedirs(f'result/{lossFunction}/')
     if not os.path.exists(f'result/{lossFunction}/{title}'):
         os.makedirs(f'result/{lossFunction}/{title}')
         
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cpu')
     if aggr == 'weight':
         model = SAGEWEIGHT(gnnInputData.x.shape[1], 256, 3, n_layers=2)
     else:
         model = SAGE(gnnInputData.x.shape[1], 256, 3, n_layers=2)
+    if os.path.exists(f'result/{lossFunction}/{title}/best_model.pt'):
+        print("best_model.pt exist, load model to continue~")
+        model = torch.load(f'result/{lossFunction}/{title}/best_model.pt')
+    
     model.to(device)
     epochs = 100
     optimizer = torch.optim.Adam(model.parameters(), lr=startLr, weight_decay=1e-3)

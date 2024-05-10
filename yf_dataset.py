@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from torch_geometric.data import Data
 import torch
-from datetime import datetime
+import datetime
 from dateutil.relativedelta import relativedelta
 
 def get_macd_param (yfdata):
@@ -97,13 +97,23 @@ def getMacdSignal(yfdata, macdParamOptimize):
                 yfdata['Signal'].iloc[i] = 2  
     return
 
-def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False, corr=0.7):
-    start_date = "2011-01-30"
+def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False, corr=0.7, begin_days=1096):
+    base_date = datetime.date(2008, 1, 30)
+    start_date = (base_date + datetime.timedelta(days=begin_days)).strftime('%Y-%m-%d')
+    print("start_date =",start_date)
+    # start_date = "2011-01-30"
     end_date = "2019-09-01"
     yfdata = yf.download('^GSPC', start=start_date, end=end_date)
     golddata = yf.download('GC=F', start=start_date, end=end_date)
     oildata = yf.download('CL=F', start=start_date, end=end_date)
-    
+
+    train_date_begin = pd.Timestamp('2013-01-30')
+    if train_date_begin in yfdata.index:
+        train_date_index = yfdata.index.get_loc(train_date_begin)
+        print(f"The index for {train_date_begin.date()} is {train_date_index}")
+    else:
+        print(f"{train_date_begin.date()} is not in the index.")
+
     get_macd_param(yfdata)
     getMacdSignal(yfdata, macdParamOptimize)
 
@@ -184,9 +194,10 @@ def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False, c
 
     # 將相關性矩陣轉換為鄰接矩陣
     adjacency_matrix = torch.tensor(correlation_matrix)
-
+    neighbor_range = train_date_index - 7
+    print("neighbor_range =",neighbor_range)
     src_nodes, dst_nodes = np.where((adjacency_matrix > corr))
-    directed_index = np.where((src_nodes < dst_nodes) & ((dst_nodes - src_nodes) <= 495))
+    directed_index = np.where((src_nodes < dst_nodes) & ((dst_nodes - src_nodes) <= neighbor_range))
     src_nodes = src_nodes[directed_index]
     dst_nodes = dst_nodes[directed_index]
 

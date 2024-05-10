@@ -2,6 +2,19 @@ import numpy as np
 import torch
 import os
 
+def save_best_loss(best_loss, filepath):
+    with open(filepath, "w") as f:
+        f.write(str(best_loss.item()))
+
+def load_best_loss(filepath):
+    if os.path.exists(filepath):
+        print('found best_loss.txt')
+        with open(filepath, "r") as f:
+            best_loss = float(f.read())
+        return best_loss
+    else:
+        return None
+
 class EarlyStopping:
     """Early stops the training if validation loss doesn't improve after a given patience."""
     def __init__(self, save_path, patience=7, verbose=False, delta=0):
@@ -19,7 +32,7 @@ class EarlyStopping:
         self.patience = patience
         self.verbose = verbose
         self.counter = 0
-        self.best_score = None
+        self.best_score = load_best_loss(os.path.join(self.save_path, 'best_loss.txt'))
         self.early_stop = False
         self.val_loss_min = np.Inf
         self.delta = delta
@@ -52,5 +65,6 @@ class EarlyStopping:
         self.best_test_loss = kwargs['test_loss']
         path = os.path.join(self.save_path, 'best_model.pt')
         torch.save(model, path)
+        save_best_loss(self.best_test_loss,os.path.join(self.save_path, 'best_loss.txt'))
         self.val_loss_min = val_loss
 
