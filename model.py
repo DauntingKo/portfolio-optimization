@@ -93,7 +93,8 @@ class WeightedSAGEConv(MessagePassing):
 
         if self.normalize:
             out = F.normalize(out, p=2., dim=-1)
-
+        if torch.isnan(out).any() or torch.isinf(out).any():
+            raise ValueError("WeightedSAGEConv output contains NaN or Inf during forward pass")
         return out
 
     def message(self, x_j, edge_weight):
@@ -101,7 +102,15 @@ class WeightedSAGEConv(MessagePassing):
         if edge_weight.numel() > 0:
             min_edge_weight = torch.min(edge_weight)
             max_edge_weight = torch.max(edge_weight)
-            normalized_edge_weight = (edge_weight - min_edge_weight) / (max_edge_weight - min_edge_weight)
+            if min_edge_weight == max_edge_weight:
+                # print(f'min_edge_weight = max_edge_weight = {max_edge_weight}')
+                normalized_edge_weight = torch.ones_like(edge_weight) #[1,1,1....]
+            else:
+                normalized_edge_weight = (edge_weight - min_edge_weight) / (max_edge_weight - min_edge_weight)
+            if torch.isnan(edge_weight).any():
+                raise ValueError("message edge_weight contains NaN or Inf during forward pass")
+            if torch.isnan(normalized_edge_weight).any():
+                raise ValueError("message normalized_edge_weight contains NaN or Inf during forward pass")
             # print("x_j size= ",x_j.shape)
             # print("edge_weight size= ",normalized_edge_weight.shape)
             # print("message out= ",(x_j * normalized_edge_weight.view(-1, 1)).shape)

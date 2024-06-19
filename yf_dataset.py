@@ -97,7 +97,7 @@ def getMacdSignal(yfdata, macdParamOptimize):
                 yfdata['Signal'].iloc[i] = 2  
     return
 
-def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False, corr=0.7, begin_days=1096):
+def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False, corr=0.7, begin_days=1096, edge_weight_based_on='corr' , edge_weight_lambda_decay=0.5, window_size=7):
     base_date = datetime.date(2008, 1, 30)
     start_date = (base_date + datetime.timedelta(days=begin_days)).strftime('%Y-%m-%d')
     print("start_date =",start_date)
@@ -147,7 +147,7 @@ def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False, c
     oildata = oildata.add_prefix('oil ')
     oildata = oildata.sort_index()
 #--------------------------------------------------------------------------------
-    days = 8 #多取一天後續方便計算label
+    days = window_size + 1 #多取一天後續方便計算label
     date_cols = []
     price_cols = yfdata.columns.tolist()
     price_cols.remove('macd Param')
@@ -194,7 +194,7 @@ def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False, c
 
     # 將相關性矩陣轉換為鄰接矩陣
     adjacency_matrix = torch.tensor(correlation_matrix)
-    neighbor_range = train_date_index - 7
+    neighbor_range = train_date_index - window_size
     print("neighbor_range =",neighbor_range)
     src_nodes, dst_nodes = np.where((adjacency_matrix > corr))
     directed_index = np.where((src_nodes < dst_nodes) & ((dst_nodes - src_nodes) <= neighbor_range))
@@ -206,9 +206,16 @@ def getInput(withGold, withOil, withMacdSignal=False, macdParamOptimize=False, c
         dst_nodes  
     ],dtype=torch.long) #邊
 
-    edge_weights = adjacency_matrix[src_nodes, dst_nodes]
-    # 將邊權重轉為Tensor
-    edge_weights = torch.tensor(edge_weights, dtype=torch.float)
+    if edge_weight_based_on == 'corr':
+        edge_weights = adjacency_matrix[src_nodes, dst_nodes]
+        # 將邊權重轉為Tensor
+        edge_weights = torch.tensor(edge_weights, dtype=torch.float)
+    else:
+        time_diff = dst_nodes - src_nodes
+        edge_weights = np.exp(-edge_weight_lambda_decay * time_diff)
+        edge_weights = torch.tensor(edge_weights, dtype=torch.float)
+        print('edge_weight_based_on ',edge_weight_based_on,' lambda_decay = ',edge_weight_lambda_decay,' edge_weights = ',edge_weights)
+
 
     features = ['Adj Close', 'Open', 'High', 'Low', 'Volume']
     if (withGold):

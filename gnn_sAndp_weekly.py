@@ -18,10 +18,12 @@ from early_stopping import EarlyStopping
 import random
 from model import SAGE,FocalLoss,SAGEWEIGHT
 from yf_dataset import getInput
+import torch_geometric
+from torch_geometric.utils import degree
 
 
 
-def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSignal=False, macdParamOptimize=False, gamma=2, withAlpha=True, aggr='mean', corr=0.7, begin_days=1096):
+def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSignal=False, macdParamOptimize=False, gamma=2, withAlpha=True, aggr='mean', corr=0.7, begin_days=1096, edge_weight_based_on='corr' , edge_weight_lambda_decay=0.5, window_size=7):
     seed = 42
     os.environ['PYTHONHASHSEED'] = str(seed)
     random.seed(seed)
@@ -31,8 +33,13 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    train_idx, eval_idx, test_idx, weight, yfdata, gnnInputData = getInput(withGold, withOil, withMacdSignal=withMacdSignal, macdParamOptimize=macdParamOptimize, corr=corr, begin_days=begin_days)
-
+    train_idx, eval_idx, test_idx, weight, yfdata, gnnInputData = getInput(withGold, withOil, withMacdSignal=withMacdSignal, macdParamOptimize=macdParamOptimize, corr=corr, begin_days=begin_days, edge_weight_based_on=edge_weight_based_on, edge_weight_lambda_decay=edge_weight_lambda_decay,window_size=window_size)
+    
+    num_neighbors = [degree for degree in degree(gnnInputData.edge_index[1])]
+    neighbor_nodes_mean = int(np.mean(num_neighbors[train_idx[0]:]))
+    print(f'平均鄰居={neighbor_nodes_mean}')
+    numNeighbors = neighbor_nodes_mean
+    
     train_loader =  NeighborLoader(gnnInputData, input_nodes=train_idx,
                               shuffle=False, num_workers=os.cpu_count() - 2,
                               batch_size=32, num_neighbors=[numNeighbors]*2)
@@ -67,10 +74,15 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         return train_acc, val_acc, test_acc, torch.mean(torch.Tensor(var)), y_true, out
     
     def creterion(lossFunction , weight, out, y_true, gamma, withAlpha):
+        if torch.isnan(y_true).any() or torch.isinf(y_true).any():
+            raise ValueError("Target contains NaN or Inf")
+        if torch.isnan(out).any() or torch.isinf(out).any():
+            raise ValueError("Model output contains NaN or Inf")
         loss = 1
         match lossFunction:
             case 'CrossEntrophyLoss':
                 loss = F.nll_loss(out, torch.reshape(y_true, (-1,)))
+                # print(f'out={out} y_true={torch.reshape(y_true, (-1,))} loss={loss}')
             case 'FocalLoss':
                 alpha = None
                 if withAlpha:
@@ -81,11 +93,14 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         return loss
     
     title = lossFunction
+    title += f' window_size={window_size}'
     if lossFunction == 'FocalLoss':
         title += f' (gamma={gamma} withAlpha={withAlpha})'
     if aggr == 'weight':
         title += ' aggr=weight'
         title += f' corr={corr}'
+        title += f' edge_weight_based_on={edge_weight_based_on}'
+        title += f' edge_weight_lambda_decay={edge_weight_lambda_decay}'
     if withGold: title += ' with gold'
     if withOil: title += ' with oil'
     if withMacdSignal: title += ' with MACD Signal'
@@ -107,7 +122,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         model = torch.load(f'result/{lossFunction}/{title}/best_model.pt')
     
     model.to(device)
-    epochs = 100
+    epochs = 50
     optimizer = torch.optim.Adam(model.parameters(), lr=startLr, weight_decay=1e-3)
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3)
 
@@ -152,6 +167,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         # loss = batch_loss / len(train_loader)
         approx_acc = total_correct / train_idx.size(0)
         train_acc, val_acc, test_acc, var, y_true, out = test(model, device)
+        # print(f'train_idx:{train_idx.shape} eval_idx:{eval_idx.shape} test_idx:{test_idx.shape}')
         train_loss = creterion(lossFunction, weight, out[train_idx], torch.reshape(y_true[train_idx], (-1,)), gamma, withAlpha)  
         eval_loss = creterion(lossFunction, weight, out[eval_idx], torch.reshape(y_true[eval_idx], (-1,)), gamma, withAlpha)
         test_loss = creterion(lossFunction, weight, out[test_idx], torch.reshape(y_true[test_idx], (-1,)), gamma, withAlpha)
@@ -171,7 +187,7 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
         test_f1_score.append(f1Score)
         cm = confusion_matrix(y_true[test_idx], out[test_idx].argmax(dim=-1, keepdim=True))
 
-        print(f'TrainAcc: {train_acc:.4f}, ValAcc: {val_acc:.4f}, TestAcc: {test_acc:.4f}, trainLoss: {train_loss:.4f}, evalLoss: {eval_loss:.4f}, testLoss: {test_loss:.4f}')
+        print(f'TrainAcc: {train_acc:.4f}, ValAcc: {val_acc:.4f}, TestAcc: {test_acc:.4f}, trainLoss: {train_loss:.4f}, evalLoss: {eval_loss:.4f}, testLoss: {test_loss:.4f}, trainLoss: {train_loss:.4f}')
         #early_stopping
         early_stopping(test_loss, model, confusion_matrix=cm, epoch=epoch, test_acc=test_acc, test_loss=test_loss)
         if early_stopping.early_stop:

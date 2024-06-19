@@ -36,6 +36,7 @@ class EarlyStopping:
         self.early_stop = False
         self.val_loss_min = np.Inf
         self.delta = delta
+        self.best_epoch = 1
 
     def __call__(self, val_loss, model, **kwargs):
         
