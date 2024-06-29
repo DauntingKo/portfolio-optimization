@@ -6,3 +6,7 @@
 ```
 conda create -n <environment-name> --gnnreq.txt
 ```
+## 各程式功能簡介
+### model.py
+> WeightedSAGEConv : 繼承 torch_geometric.nn.conv 的 MessagePassing，與原生SAGEConv不同之處在於message在聚合鄰居節點訊息時，加入了權重
+> SAGEWEIGHT : 
