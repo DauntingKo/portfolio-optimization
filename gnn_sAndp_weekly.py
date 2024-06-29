@@ -35,10 +35,10 @@ def startGNN(startLr, withGold, withOil, numNeighbors, lossFunction, withMacdSig
     torch.backends.cudnn.benchmark = False
     train_idx, eval_idx, test_idx, weight, yfdata, gnnInputData = getInput(withGold, withOil, withMacdSignal=withMacdSignal, macdParamOptimize=macdParamOptimize, corr=corr, begin_days=begin_days, edge_weight_based_on=edge_weight_based_on, edge_weight_lambda_decay=edge_weight_lambda_decay,window_size=window_size)
     
-    num_neighbors = [degree for degree in degree(gnnInputData.edge_index[1])]
-    neighbor_nodes_mean = int(np.mean(num_neighbors[train_idx[0]:]))
-    print(f'平均鄰居={neighbor_nodes_mean}')
-    numNeighbors = neighbor_nodes_mean
+    # num_neighbors = [degree for degree in degree(gnnInputData.edge_index[1])]
+    # neighbor_nodes_mean = int(np.mean(num_neighbors[train_idx[0]:]))
+    # print(f'平均鄰居={neighbor_nodes_mean}')
+    # numNeighbors = neighbor_nodes_mean
     
     train_loader =  NeighborLoader(gnnInputData, input_nodes=train_idx,
                               shuffle=False, num_workers=os.cpu_count() - 2,

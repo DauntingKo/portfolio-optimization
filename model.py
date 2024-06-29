@@ -128,69 +128,7 @@ class WeightedSAGEConv(MessagePassing):
         return (f'{self.__class__.__name__}({self.in_channels}, '
                 f'{self.out_channels}, aggr={self.aggr})')
 
-# class WeightedSAGEConv(MessagePassing):
-#     def __init__(self, in_channels, out_channels, normalize=False, root_weight=True, bias=True, **kwargs):
-#         super(WeightedSAGEConv, self).__init__(node_dim=0, aggr='add', **kwargs)  # 使用'add'聚合
-#         self.in_channels = in_channels
-#         self.out_channels = out_channels
-#         self.normalize = normalize
-#         self.root_weight = root_weight
 
-#         # 目標節點、鄰居節點特徵做線性轉換
-#         self.lin_self = torch.nn.Linear(in_channels, out_channels, bias=bias)
-#         self.lin_neigh = torch.nn.Linear(in_channels, out_channels, bias=False)
-
-#         # 根節點權重
-#         if root_weight:
-#             self.root_lin = torch.nn.Linear(in_channels, out_channels, bias=bias)
-        
-#         self.reset_parameters()
-
-#     def reset_parameters(self):
-#         self.lin_self.reset_parameters()
-#         self.lin_neigh.reset_parameters()
-#         if self.root_weight:
-#             self.root_lin.reset_parameters()
-
-#     def forward(self, x, edge_index, edge_weight=None):
-
-#         if edge_weight is None:
-#             raise ValueError("Edge weights are required for weighted aggregation.")
-        
-#         # 目標節點、鄰居節點特徵做線性轉換
-#         self_x = self.lin_self(x)
-#         neigh_x = self.lin_neigh(x)
-        
-#         # 對鄰居節點加入權重，使用propagate方法聚合信息
-#         out = self.propagate(edge_index, size=(x.size(0), x.size(0)), x=neigh_x, edge_weight=edge_weight)
-        
-#         # 如果使用根節點權重，將根節點特徵加入
-#         if self.root_weight:
-#             out += self.root_lin(self_x)
-#         else:
-#             out += self_x
-
-#         if self.normalize:
-#             out = F.normalize(out, p=2, dim=-1)
-            
-#         return out
-
-#     def message(self, x_j, edge_weight):
-#         edge_weight = edge_weight.float()
-#         if edge_weight.numel() > 0:
-#             min_edge_weight = torch.min(edge_weight)
-#             max_edge_weight = torch.max(edge_weight)
-#             normalized_edge_weight = (edge_weight - min_edge_weight) / (max_edge_weight - min_edge_weight)
-#             print("x_j size= ",x_j.shape)
-#             print("edge_weight size= ",normalized_edge_weight.shape)
-#             print("message out= ",(x_j * normalized_edge_weight.view(-1, 1)).shape)
-#             # 將邊權重應用到鄰居節點
-#             return x_j * normalized_edge_weight.view(-1, 1)
-#         else:
-#             return x_j
-
-#     def __repr__(self):
-#         return '{}({}, {})'.format(self.__class__.__name__, self.in_channels, self.out_channels)
     
 class SAGEWEIGHT(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, n_layers=2):
