@@ -86,7 +86,7 @@ conda create -n <environment-name> --gnnreq.txt
 >若模型loss不再降低，則提早結束訓練並儲存最佳結果。
 
 ### bayes_search.ipynb
->透過optuna預測之超參數優化方法，即Tree Parzen Estimator找出超參數的最優解。
+>透過optuna預設之超參數優化方法，即Tree Parzen Estimator找出超參數的最優解。
 
 ### backtest.ipynb
 >針對不同的情況進行回測，算出其測試集期間的回報率，包含每次只買賣一股或依據信心度決定交易量
