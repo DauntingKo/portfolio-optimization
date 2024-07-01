@@ -36,7 +36,7 @@ conda create -n <environment-name> --gnnreq.txt
 >#### getMacdSignal
 >>若macdParamOptimize = true，參數設定為get_macd_param找到的參數，否則將參數固定為 5,20,9，最後透過參數產出macd交易訊號</br>
 >>If macdParamOptimize = true, set the parameters to those found by get_macd_param. Otherwise, fix the parameters to 5, 20, 9. Finally, generate MACD trading signals using these parameters.
->#### getInput 訓練前資料的前處理
+>#### getInput 訓練前資料的前處理</br>for preprocessing data before training.
 >>Input:
 >>>1. withGold:決定特徵是否放入黃金價格</br>Determine whether to include the gold price as a feature.
 >>>2. withOil:決定特徵是否放入石油價格</br>Determine whether to include the oil price as a feature.
