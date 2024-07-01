@@ -1,16 +1,16 @@
-# 加權 GraphSAGE 模型捕捉股票數據中時間關係的有效性 實驗
+# 加權 GraphSAGE 模型捕捉股票數據中時間關係的有效性 實驗</br>
 **Effectiveness of Weighted GraphSAGE Model in Capturing Temporal Relationships in Stock Data**
 ## 簡介
 **Abstract**
-> 運用WeightedSAGE模型，用來預測單一股票(s&p500)未來一天為"上漲"、"持平"還是"下跌"
+> 運用WeightedSAGE模型，用來預測單一股票(s&p500)未來一天為"上漲"、"持平"還是"下跌"</br>
 > Using the WeightedSAGE model to predict whether a single stock (S&P 500) will be "rise," "remain," or "drop" the next day.
 ## 環境設定
-> 先安裝 miniconda，並透過 gnnreq.txt 建立一個新的環境，以下為指令:
+> 先安裝 miniconda，並透過 gnnreq.txt 建立一個新的環境，以下為指令:</br>
 > First,Install miniconda and create a environment using gnnreq.txt with the following command:
 ```
 conda create -n <environment-name> --gnnreq.txt
 ```
-## 各程式功能簡介
+## 各程式功能簡介</br>
 **Overview of Each Program Function**
 ### model.py
 > #### WeightedSAGEConv :
